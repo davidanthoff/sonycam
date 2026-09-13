@@ -979,12 +979,14 @@ public:
             return Result::success();  // property setup is Remote-mode only
 
         // On real bodies OnConnected fires before the property API is ready.
-        // Wait for the priority property, then take the key and verify that
-        // the camera actually applied it before reporting a usable session.
+        // Wait for a universally supported property (ISO): cinema-line bodies
+        // such as the ILME-FX30 do not expose priority_key at all and answer
+        // every request for it with CrError_Api_InvalidCalled (0x8402), so
+        // probing priority_key never becomes ready on them.
         Result ready = Result::fail("camera properties did not become ready");
         for (int i = 0; i < 50; ++i) {
-            PropInfo priority;
-            ready = getProp("priority_key", priority);
+            PropInfo probe;
+            ready = getProp("iso", probe);
             if (ready.ok) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
@@ -992,11 +994,20 @@ public:
             disconnect();
             return ready;
         }
-        Result priority = setProp("priority_key", "pc_remote");
-        if (!priority.ok) {
-            disconnect();
-            return Result::fail("cannot acquire PC Remote priority: " +
-                                priority.error);
+        // Take the priority key on bodies that support it; remote control on
+        // bodies without it (FX30) works without this step.
+        PropInfo priorityInfo;
+        if (getProp("priority_key", priorityInfo).ok) {
+            Result priority = setProp("priority_key", "pc_remote");
+            if (!priority.ok) {
+                disconnect();
+                return Result::fail("cannot acquire PC Remote priority: " +
+                                    priority.error);
+            }
+        } else {
+            std::fprintf(stderr,
+                         "sonycamd: priority_key not supported by this body; "
+                         "continuing without PC Remote priority\n");
         }
         return Result::success();
     }
