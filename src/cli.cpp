@@ -555,11 +555,21 @@ int main(int argc, char** argv) {
             return 2;
         }
     } else if (cmd == "wb") {
-        if (args.size() != 2 || args[1] != "capture") {
-            std::fprintf(stderr, "usage: sonycam wb capture\n");
+        if ((args.size() != 2 && args.size() != 4) || args[1] != "capture") {
+            std::fprintf(stderr, "usage: sonycam wb capture [X Y]  (fractions 0-1 of the frame)\n");
             return 2;
         }
         req = {{"cmd", "wb_capture"}};
+        if (args.size() == 4) {
+            double x = -1, y = -1;
+            try { x = std::stod(args[2]); y = std::stod(args[3]); } catch (...) {}
+            if (x < 0.0 || x > 1.0 || y < 0.0 || y > 1.0) {
+                std::fprintf(stderr, "X and Y must be fractions in [0,1]\n");
+                return 2;
+            }
+            req["x"] = x;
+            req["y"] = y;
+        }
     } else if (cmd == "capture") {
         req = {{"cmd", "capture"}};
         for (size_t i = 1; i < args.size(); ++i) {

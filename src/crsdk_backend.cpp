@@ -1018,8 +1018,11 @@ public:
         unsigned char mac[6] = {0, 0, 0, 0, 0, 0};
         parseMac(std::getenv("SONYCAM_MAC"), mac);
         SCRSDK::ICrCameraObjectInfo* info = nullptr;
+        const char* authUser = std::getenv("SONYCAM_USER");
+        const CrInt32u ssh = (authUser && *authUser)
+            ? SCRSDK::CrSSHsupport_ON : SCRSDK::CrSSHsupport_OFF;
         CrError err = SCRSDK::CreateCameraObjectInfoEthernetConnection(
-            &info, model, addr, mac, SCRSDK::CrSSHsupport_OFF);
+            &info, model, addr, mac, ssh);
         if (err != SCRSDK::CrError_None || !info)
             return Result::fail("CreateCameraObjectInfoEthernetConnection "
                                 "failed: " + crErrorString(err));
@@ -1032,7 +1035,23 @@ public:
     Result finishConnect(SCRSDK::CrSdkControlMode mode) {
         CrError err;
         callback_.reset();
-        err = SCRSDK::Connect(camera_, &callback_, &handle_, mode);
+        const char* user = std::getenv("SONYCAM_USER");
+        const char* pass = std::getenv("SONYCAM_PASS");
+        if (user && *user) {
+            // Access-authentication connect: fetch the camera TLS
+            // fingerprint, then connect with the configured account.
+            char fp[512];
+            CrInt32u fpSize = sizeof(fp);
+            if (SCRSDK::GetFingerprint(camera_, fp, &fpSize) !=
+                    SCRSDK::CrError_None)
+                fpSize = 0;
+            err = SCRSDK::Connect(camera_, &callback_, &handle_, mode,
+                                  SCRSDK::CrReconnecting_ON, user,
+                                  pass ? pass : "",
+                                  fpSize ? fp : nullptr, fpSize);
+        } else {
+            err = SCRSDK::Connect(camera_, &callback_, &handle_, mode);
+        }
         if (err != SCRSDK::CrError_None) {
             handle_ = 0;
             return Result::fail("Connect failed: " + crErrorString(err));
@@ -1522,7 +1541,7 @@ public:
         });
     }
 
-    Result wbCapture(std::string& outStatus) override {
+    Result wbCapture(double x, double y, std::string& outStatus) override {
         Result conn = ensureConnected();
         if (!conn.ok) return conn;
         auto setU16 = [&](CrInt32u code, std::uint64_t v, SCRSDK::CrDataType t) {
@@ -1542,8 +1561,14 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(800));
 
         callback_.armWbResult();
-        const std::uint64_t center = (320u << 16) | 240u;  // frame center
-        err = setU16(SCRSDK::CrDeviceProperty_CustomWB_Capture, center,
+        // Position in the SDK 640x480 coordinate space, packed (x<<16)|y.
+        auto clampAxis = [](double f, int lo, int hi) {
+            int v = static_cast<int>(f * (hi + 1));
+            return static_cast<std::uint64_t>(v < lo ? lo : (v > hi ? hi : v));
+        };
+        const std::uint64_t pos =
+            (clampAxis(x, 1, 639) << 16) | clampAxis(y, 1, 479);
+        err = setU16(SCRSDK::CrDeviceProperty_CustomWB_Capture, pos,
                      SCRSDK::CrDataType_UInt32);
         int result = 0;
         if (err == SCRSDK::CrError_None)

@@ -27,7 +27,7 @@ public:
     Result filesList(std::vector<FileEntry>& out) override;
     Result filesPull(const std::string& name, const std::string& dir,
                      std::string& outFile) override;
-    Result wbCapture(std::string& outStatus) override;
+    Result wbCapture(double x, double y, std::string& outStatus) override;
     Result focus(const std::string& op, int steps, std::string& outStatus) override;
     Result capture(const std::string& saveDir, std::string& outFile) override;
     Result liveviewFrame(const std::string& path) override;

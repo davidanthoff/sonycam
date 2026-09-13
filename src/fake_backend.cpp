@@ -239,7 +239,7 @@ Result FakeBackend::filesPull(const std::string& name, const std::string& dir,
     return Result::success();
 }
 
-Result FakeBackend::wbCapture(std::string& outStatus) {
+Result FakeBackend::wbCapture(double, double, std::string& outStatus) {
     if (!connected_) return Result::fail("not connected");
     outStatus = "captured (stored in the camera's custom WB slot; "
                 "'set white_balance custom' to use it)";

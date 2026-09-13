@@ -116,7 +116,7 @@ json handle(CameraBackend& cam, const json& req, bool& shutdown) {
         }
     } else if (cmd == "wb_capture") {
         std::string status;
-        r = cam.wbCapture(status);
+        r = cam.wbCapture(req.value("x", 0.5), req.value("y", 0.5), status);
         if (r.ok) resp["result"] = {{"status", status}};
     } else if (cmd == "preset") {
         r = cam.preset(req.value("op", ""), req.value("path", ""));

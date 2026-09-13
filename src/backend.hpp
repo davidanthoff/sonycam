@@ -72,7 +72,7 @@ public:
                              std::string& outFile) = 0;
 
     // Capture a custom white balance reading at the frame center.
-    virtual Result wbCapture(std::string& outStatus) = 0;
+    virtual Result wbCapture(double x, double y, std::string& outStatus) = 0;
 
     // Focus control. op: "af" (half-press, wait for lock, release),
     // "near"/"far" (manual-focus nudges, `steps` times), "status" (read the
