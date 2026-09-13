@@ -24,6 +24,7 @@ std::unique_ptr<CameraBackend> makeCrsdkBackend(std::string& error) {
 #include <mutex>
 #include <system_error>
 #include <thread>
+#include <arpa/inet.h>
 #include <vector>
 
 #ifdef __APPLE__
@@ -675,6 +676,52 @@ bool valueFromString(const PropDef& def, const std::string& s, std::uint64_t& ou
     return false;
 }
 
+// ---- direct Ethernet connection (no SSDP discovery) ------------------------
+// Used when SONYCAM_IP is set: containers and routed networks often cannot
+// receive the SDK's multicast discovery, but a direct connection by IP works.
+struct ModelEntry { const char* name; SCRSDK::CrCameraDeviceModelList model; };
+#define SONYCAM_MODEL_ENTRY(n) {#n, SCRSDK::CrCameraDeviceModel_##n}
+const ModelEntry kModels[] = {
+    SONYCAM_MODEL_ENTRY(ILCE_7RM4), SONYCAM_MODEL_ENTRY(ILCE_9M2),
+    SONYCAM_MODEL_ENTRY(ILCE_7C), SONYCAM_MODEL_ENTRY(ILCE_7SM3),
+    SONYCAM_MODEL_ENTRY(ILCE_1), SONYCAM_MODEL_ENTRY(ILCE_7RM4A),
+    SONYCAM_MODEL_ENTRY(DSC_RX0M2), SONYCAM_MODEL_ENTRY(ILCE_7M4),
+    SONYCAM_MODEL_ENTRY(ILME_FX3), SONYCAM_MODEL_ENTRY(ILME_FX30),
+    SONYCAM_MODEL_ENTRY(ILME_FX6), SONYCAM_MODEL_ENTRY(ILCE_7RM5),
+    SONYCAM_MODEL_ENTRY(ZV_E1), SONYCAM_MODEL_ENTRY(ILCE_6700),
+    SONYCAM_MODEL_ENTRY(ILCE_7CM2), SONYCAM_MODEL_ENTRY(ILCE_7CR),
+    SONYCAM_MODEL_ENTRY(ILX_LR1), SONYCAM_MODEL_ENTRY(MPC_2610),
+    SONYCAM_MODEL_ENTRY(ILCE_9M3), SONYCAM_MODEL_ENTRY(ZV_E10M2),
+    SONYCAM_MODEL_ENTRY(PXW_Z200), SONYCAM_MODEL_ENTRY(HXR_NX800),
+    SONYCAM_MODEL_ENTRY(ILCE_1M2), SONYCAM_MODEL_ENTRY(ILME_FX3A),
+    SONYCAM_MODEL_ENTRY(BRC_AM7), SONYCAM_MODEL_ENTRY(ILME_FR7),
+    SONYCAM_MODEL_ENTRY(ILME_FX2), SONYCAM_MODEL_ENTRY(DSC_RX1RM3),
+    SONYCAM_MODEL_ENTRY(ILCE_7M5), SONYCAM_MODEL_ENTRY(PXW_Z300),
+    SONYCAM_MODEL_ENTRY(PXW_Z380), SONYCAM_MODEL_ENTRY(ILCE_7RM6),
+};
+#undef SONYCAM_MODEL_ENTRY
+
+bool lookupModel(std::string name, SCRSDK::CrCameraDeviceModelList& out) {
+    for (auto& c : name) {
+        if (c == '-') c = '_';
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    for (const auto& m : kModels)
+        if (name == m.name) { out = m.model; return true; }
+    return false;
+}
+
+bool parseMac(const char* text, unsigned char* mac) {
+    if (!text || !*text) return false;
+    unsigned v[6];
+    if (std::sscanf(text, "%x:%x:%x:%x:%x:%x",
+                    &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6)
+        return false;
+    for (int i = 0; i < 6; ++i) mac[i] = static_cast<unsigned char>(v[i]);
+    return true;
+}
+
+
 class Callback : public SCRSDK::IDeviceCallback {
 public:
     void OnConnected(SCRSDK::DeviceConnectionVersioin) override {
@@ -929,6 +976,12 @@ public:
             if (!SCRSDK::Init()) return Result::fail("CrSDK Init() failed");
             sdkInit_ = true;
         }
+        const char* envIp = std::getenv("SONYCAM_IP");
+        if (envIp && *envIp) {
+            Result r = connectDirectIp(envIp);
+            if (!r.ok) return r;
+            return finishConnect(mode);
+        }
         SCRSDK::ICrEnumCameraObjectInfo* enumInfo = nullptr;
         CrError err = SCRSDK::EnumCameraObjects(&enumInfo);
         if (err != SCRSDK::CrError_None || !enumInfo || enumInfo->GetCount() == 0) {
@@ -949,6 +1002,35 @@ public:
         enumInfo->Release();
         if (!camera_) return Result::fail("CreateCameraObjectInfo failed");
 
+        return finishConnect(mode);
+    }
+
+    Result connectDirectIp(const char* ip) {
+        const char* modelEnv = std::getenv("SONYCAM_MODEL");
+        SCRSDK::CrCameraDeviceModelList model;
+        if (!modelEnv || !lookupModel(modelEnv, model))
+            return Result::fail(
+                "SONYCAM_IP is set but SONYCAM_MODEL is missing or unknown "
+                "(e.g. ILME-FX30)");
+        CrInt32u addr = inet_addr(ip);
+        if (addr == INADDR_NONE)
+            return Result::fail(std::string("invalid SONYCAM_IP: ") + ip);
+        unsigned char mac[6] = {0, 0, 0, 0, 0, 0};
+        parseMac(std::getenv("SONYCAM_MAC"), mac);
+        SCRSDK::ICrCameraObjectInfo* info = nullptr;
+        CrError err = SCRSDK::CreateCameraObjectInfoEthernetConnection(
+            &info, model, addr, mac, SCRSDK::CrSSHsupport_OFF);
+        if (err != SCRSDK::CrError_None || !info)
+            return Result::fail("CreateCameraObjectInfoEthernetConnection "
+                                "failed: " + crErrorString(err));
+        camera_ = info;
+        model_ = modelEnv;
+        transport_ = "ip";
+        return Result::success();
+    }
+
+    Result finishConnect(SCRSDK::CrSdkControlMode mode) {
+        CrError err;
         callback_.reset();
         err = SCRSDK::Connect(camera_, &callback_, &handle_, mode);
         if (err != SCRSDK::CrError_None) {
